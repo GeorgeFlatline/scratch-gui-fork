@@ -53,10 +53,33 @@ class EmbeddedRobotController extends React.Component {
         this.encoderClosed = null;
         this.decoderClosed = null;
         this.keepAliveInterval = null;
+        this.readLoopRunning = false;
 
         this.handleCommand = this.handleCommand.bind(this);
         this.handleToggleConnection = this.handleToggleConnection.bind(this);
         this.handleReset = this.handleReset.bind(this);
+    }
+
+    delay (ms) {
+        return new Promise(resolve => window.setTimeout(resolve, ms));
+    }
+
+    async startReadLoop () {
+        if (!this.reader || this.readLoopRunning) return;
+        this.readLoopRunning = true;
+        try {
+            while (this.readLoopRunning) {
+                const {value, done} = await this.reader.read();
+                if (done) break;
+                if (value) {
+                    this.controllerState.readBuffer += value;
+                }
+            }
+        } catch (e) {
+            void e;
+        } finally {
+            this.readLoopRunning = false;
+        }
     }
 
     componentDidMount () {
@@ -97,9 +120,13 @@ class EmbeddedRobotController extends React.Component {
         this.emitStatus();
     }
 
-    writeToStream (line) {
+    async writeToStream (line) {
         if (!this.writer || !this.outputStream) return;
-        this.writer.write(`${line}\n`);
+        try {
+            await this.writer.write(`${line}\n`);
+        } catch (e) {
+            void e;
+        }
         this.controllerState.lastWriteTime = Date.now();
     }
 
@@ -175,26 +202,17 @@ class EmbeddedRobotController extends React.Component {
     }
 
     async readLineWithTimeout (timeoutMs) {
-        if (!this.reader) return '';
-
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
-            const result = await this.reader.read();
-            if (result.done) {
-                return '';
-            }
-            if (result.value) {
-                this.controllerState.readBuffer += result.value;
-            }
-            const newlineIndex = this.controllerState.readBuffer.indexOf('\n');
+            const buffer = this.controllerState.readBuffer;
+            const newlineIndex = buffer.indexOf('\n');
             if (newlineIndex !== -1) {
-                const line = this.controllerState.readBuffer.slice(0, newlineIndex).trim();
-                this.controllerState.readBuffer =
-                    this.controllerState.readBuffer.slice(newlineIndex + 1);
+                const line = buffer.slice(0, newlineIndex).replace(/\r$/, '').trim();
+                this.controllerState.readBuffer = buffer.slice(newlineIndex + 1);
                 return line;
             }
+            await this.delay(10);
         }
-
         return '';
     }
 
@@ -336,28 +354,29 @@ class EmbeddedRobotController extends React.Component {
         this.writeToStream(`FB,8,${this.eyeShapeBytes(leftDefinition, right, 5, autoMirror)}`);
     }
 
-    setEyeShape (shapeNameRight, shapeNameLeft) {
-        const leftName = shapeNameLeft || shapeNameRight;
+    setEyeShape (shapeNameLeft, shapeNameRight) {
+        const rightName = shapeNameRight || shapeNameLeft;
         let leftHex = '';
         let rightHex = '';
         let selectedShape = null;
 
         for (let i = 0; i < this.controllerState.shapeList.length; i++) {
             const shape = this.controllerState.shapeList[i];
-            if (shape.name.toUpperCase() === shapeNameRight.toUpperCase()) {
-                rightHex = shape.hexString;
+            if (shape.name.toUpperCase() === shapeNameLeft.toUpperCase()) {
+                leftHex = shape.hexString;
                 selectedShape = shape;
             }
-            if (shape.name.toUpperCase() === leftName.toUpperCase()) {
-                leftHex = shape.hexString;
+            if (shape.name.toUpperCase() === rightName.toUpperCase()) {
+                rightHex = shape.hexString;
             }
         }
 
-        if (!leftHex || !selectedShape) {
+        if (!rightHex || !selectedShape) {
             return;
         }
 
-        this.setEyes(rightHex, leftHex, selectedShape.autoMirror);
+        const sameShape = shapeNameLeft.toUpperCase() === rightName.toUpperCase();
+        this.setEyes(rightHex, leftHex, sameShape ? selectedShape.autoMirror : false);
         this.setPosition(this.indexFromMotor('eyetilt'), this.controllerState.motorPos[EYETILT], false);
         this.setPosition(this.indexFromMotor('eyeturn'), this.controllerState.motorPos[EYETURN], false);
     }
@@ -369,7 +388,7 @@ class EmbeddedRobotController extends React.Component {
         this.controllerState.ledB = 0;
 
         if (robot === 'picoh') {
-            window.setTimeout(() => this.setEyeShape(DEFAULT_EYE_SHAPE), 10);
+            window.setTimeout(() => this.setEyeShape(DEFAULT_EYE_SHAPE, DEFAULT_EYE_SHAPE), 10);
         }
 
         for (let i = 0; i < 8; i++) {
@@ -447,9 +466,14 @@ class EmbeddedRobotController extends React.Component {
         this.emitStatus();
     }
 
-    async getMotorDefinitionsFromFlash () {
+    async getMotorDefinitionsFromFlash (detectedRobot) {
         for (let index = 0; index < this.controllerState.motorMins.length; index++) {
-            this.writeToStream(`u${index.toString().padStart(2, '0')}`);
+            const type = this.controllerState.motorType[index];
+            if (detectedRobot === 'picoh' && type !== 'Motor' && type !== 'Mouth Bottom') {
+                continue;
+            }
+            await this.writeToStream(`u${index.toString().padStart(2, '0')}`);
+            await this.delay(100);
             let found = false;
             const start = Date.now();
             while (!found && (Date.now() - start) < 2000) {
@@ -491,23 +515,45 @@ class EmbeddedRobotController extends React.Component {
 
         const versionUpper = version.toUpperCase();
         if (versionUpper.indexOf('V2') === 0 || versionUpper.indexOf('V3') === 0) {
-            if (robotState === '0' || robotState === '1') {
+            // States 0/1 are Ohbot, 2/3 are Picoh. Ohbrain3 boards (versions 2.09–2.18)
+            // expose flashed robot identity via the R command, so route them through the
+            // same check regardless of state.
+            if (robotState === '0' || robotState === '1' || robotState === '2' || robotState === '3') {
                 const numericVersion = parseFloat(versionUpper.replace(/[^\d.]/g, ''));
                 if (numericVersion >= 2.09 && numericVersion <= 2.18) {
-                    this.writeToStream('R');
+                    await this.writeToStream('R');
+                    await this.delay(100);
                     const flashed = await this.readLineWithTimeout(1000);
                     if (flashed.indexOf('FLASHED') === 0) {
                         const parts = flashed.split(':');
-                        flashedRobotName = parts[3] ? parts[3].trim().toLowerCase() : null;
-                        detectedRobot = flashedRobotName === 'picoh' ? 'picoh' : 'ohbot';
+                        flashedRobotName = parts.length > 3 ? parts[3].trim().toLowerCase() : null;
+                        switch (flashedRobotName) {
+                        case 'picoh':
+                            detectedRobot = 'picoh';
+                            break;
+                        case 'xyloh':
+                            detectedRobot = 'xyloh';
+                            break;
+                        case 'zeroh':
+                            detectedRobot = 'zeroh';
+                            break;
+                        case 'version 2.1':
+                        case 'version 2.2':
+                            detectedRobot = 'ohbot';
+                            break;
+                        default:
+                            break;
+                        }
+                    } else if (robotState === '2' || robotState === '3') {
+                        detectedRobot = 'picoh';
                     } else {
                         detectedRobot = 'ohbot';
                     }
+                } else if (robotState === '2' || robotState === '3') {
+                    detectedRobot = 'picoh';
                 } else {
                     detectedRobot = 'ohbot';
                 }
-            } else {
-                detectedRobot = 'picoh';
             }
         } else if (versionUpper.indexOf('V1') === 0) {
             detectedRobot = 'ohbot';
@@ -543,8 +589,13 @@ class EmbeddedRobotController extends React.Component {
             this.inputStream = decoder.readable;
             this.reader = this.inputStream.getReader();
             this.controllerState.readBuffer = '';
+            this.startReadLoop();
 
-            this.writeToStream('v');
+            // Picoh needs a moment after port open before it'll respond to 'v'
+            // with state 3 (eye-command sent) instead of state 2.
+            await this.delay(100);
+            await this.writeToStream('v');
+            await this.delay(100);
             const fullValue = await this.readLineWithTimeout(1000);
             const detection = await this.detectRobot(fullValue);
 
@@ -553,7 +604,7 @@ class EmbeddedRobotController extends React.Component {
             await this.loadEyeShapes();
 
             if (detection.flashedRobotName) {
-                await this.getMotorDefinitionsFromFlash();
+                await this.getMotorDefinitionsFromFlash(detection.detectedRobot);
             }
 
             window.setTimeout(() => this.reset(detection.detectedRobot), 70);
@@ -570,6 +621,9 @@ class EmbeddedRobotController extends React.Component {
         if (!this.controllerState.connected && !this.serialPort) {
             return;
         }
+
+        this.readLoopRunning = false;
+        this.controllerState.readBuffer = '';
 
         this.reset('none');
         for (let i = 0; i < 8; i++) {

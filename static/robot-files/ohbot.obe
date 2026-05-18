@@ -7,7 +7,7 @@
       <PupilRangeY>5</PupilRangeY>
       <Matrix/>
       <Hex>2070F8FCFE7C3800000070F8FCFE3C000000000078FCFC38000000000000F8FC0000000000000000F800000000000010381000000000</Hex>
-      <AutoMirror>false</AutoMirror>
+      <AutoMirror>true</AutoMirror>
     </EyeShape>
     <EyeShape>
       <Name>BoxLeft</Name>
@@ -16,7 +16,7 @@
       <PupilRangeY>7</PupilRangeY>
       <Matrix/>
       <Hex>00001F1F1F1F1F00000000000004000000000000000E0A0E00000000001F1115111F00000000000E0A0E000000000000000C0C000000</Hex>
-      <AutoMirror>false</AutoMirror>
+      <AutoMirror>true</AutoMirror>
     </EyeShape>
     <EyeShape>
       <Name>BoxRight</Name>
