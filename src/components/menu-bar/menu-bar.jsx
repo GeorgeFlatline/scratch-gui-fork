@@ -31,6 +31,7 @@ import TurboMode from '../../containers/turbo-mode.jsx';
 import MenuBarHOC from '../../containers/menu-bar-hoc.jsx';
 import SimulationControls from '../simulator/simulation-controls.jsx';
 import EmbeddedRobotController from '../robot/embedded-robot-controller.jsx';
+import OhBridgeWarning from '../robot/ohbridge-warning.jsx';
 
 import {openTipsLibrary} from '../../reducers/modals';
 import {setPlayer} from '../../reducers/mode';
@@ -701,6 +702,7 @@ class MenuBar extends React.Component {
                     </div>
                 </div>
                 <EmbeddedRobotController vm={this.props.vm} />
+                <OhBridgeWarning />
             </Box>
         );
     }
