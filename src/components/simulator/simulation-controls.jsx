@@ -187,7 +187,8 @@ class SimulationControls extends React.Component {
                 if (robot === 'Picoh') {
                     return ['Motor', 'Mouth Bottom'].indexOf(item.type) !== -1;
                 }
-                return item.type;
+                // Ohbot motor defs don't always set MotorType — fall back to motor name.
+                return Boolean(motorNames[item.index]);
             })
             .map(item => item.index);
         const attachedMotorCount = visibleMotorIndices
